@@ -17,6 +17,9 @@ use simplelog::{
 use std::env;
 use std::fs::{File, OpenOptions};
 use std::io::prelude::*;
+use std::sync::mpsc::Sender;
+use std::thread::sleep;
+use std::time::Duration;
 use syslog::Facility;
 
 mod config;
@@ -105,6 +108,7 @@ fn main_loop(
     max_brightness: u32,
     mut switch_monitor: switch_monitor::SwitchMonitor,
     illuminance_filename: &str,
+    tx: Sender<u32>,
 ) -> Result<(), ErrorCode> {
     let mut kalman = Kalman::new(
         config.kalman_q(),
@@ -118,7 +122,13 @@ fn main_loop(
         config.step_barrier(),
     );
     debug!("k: s:{:?}", stepped_brightness);
+    let mut brightness_to_send = None;
     loop {
+        if let Some(brightness) = brightness_to_send {
+            if tx.send(brightness).is_ok() {
+                brightness_to_send = None;
+            }
+        }
         match read_file_to_u32(illuminance_filename) {
             Some(illuminance) => {
                 let illuminance_k = kalman.process(illuminance as f32);
@@ -129,7 +139,9 @@ fn main_loop(
                         "raw {}, kalman {}, new level {} new brightness {}",
                         illuminance, illuminance_k, brightness, new
                     );
-                    set_brightness(config, new);
+                    if tx.send(new).is_err() {
+                        brightness_to_send = Some(new);
+                    }
                 }
             }
             _ => error!("Cannot read illuminance"),
@@ -138,6 +150,34 @@ fn main_loop(
             stepped_brightness.update(config.light_steps() as f32);
         }
     }
+}
+
+fn linear_ease_set_brightness(config: &Config, value: u32) {
+    let old_brightness = read_file_to_u32(config.backlight_filename());
+    if let Some(old_brightness) = old_brightness {
+        const TRANSITION_STEPS: u32 = 20;
+        const TRANSITION_STEP_LENGTH_MS: u64 = 50;
+        if value > old_brightness {
+            let change = (value.saturating_sub(old_brightness)) as f32 / TRANSITION_STEPS as f32;
+            for i in 1..TRANSITION_STEPS {
+                set_brightness(
+                    config,
+                    old_brightness.saturating_add((change * i as f32) as u32),
+                );
+                sleep(Duration::from_millis(TRANSITION_STEP_LENGTH_MS));
+            }
+        } else {
+            let change = (old_brightness.saturating_sub(value)) as f32 / TRANSITION_STEPS as f32;
+            for i in 1..TRANSITION_STEPS {
+                set_brightness(
+                    config,
+                    old_brightness.saturating_sub((change * i as f32) as u32),
+                );
+                sleep(Duration::from_millis(TRANSITION_STEP_LENGTH_MS));
+            }
+        }
+    }
+    set_brightness(config, value);
 }
 
 fn set_brightness(config: &Config, value: u32) {
@@ -334,13 +374,33 @@ fn run() -> Result<(), ErrorCode> {
             })?;
     }
 
-    main_loop(
-        &config,
-        &light_convertor,
-        max_brightness,
-        switch_monitor,
-        &illuminance_filename,
-    )
+    let (tx, rx) = std::sync::mpsc::channel::<u32>();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            let rx = rx;
+            let config = &config;
+            loop {
+                match rx.recv() {
+                    Ok(brightness) => {
+                        linear_ease_set_brightness(config, brightness);
+                    }
+                    Err(e) => {
+                        error!("Error on receiving channel: {}", e);
+                        break;
+                    }
+                }
+            }
+        });
+
+        main_loop(
+            &config,
+            &light_convertor,
+            max_brightness,
+            switch_monitor,
+            &illuminance_filename,
+            tx,
+        )
+    })
 }
 
 fn main() {
