@@ -22,6 +22,7 @@ use std::thread::sleep;
 use std::time::Duration;
 use syslog::Facility;
 
+mod brightness_transition;
 mod config;
 mod discrete_value;
 mod kalman;
@@ -154,26 +155,34 @@ fn main_loop(
 
 fn linear_ease_set_brightness(config: &Config, value: u32) {
     let old_brightness = read_file_to_u32(config.backlight_filename());
-    if let Some(old_brightness) = old_brightness {
-        const TRANSITION_STEPS: u32 = 20;
-        const TRANSITION_STEP_LENGTH_MS: u64 = 50;
-        if value > old_brightness {
-            let change = (value.saturating_sub(old_brightness)) as f32 / TRANSITION_STEPS as f32;
-            for i in 1..TRANSITION_STEPS {
-                set_brightness(
-                    config,
-                    old_brightness.saturating_add((change * i as f32) as u32),
-                );
-                sleep(Duration::from_millis(TRANSITION_STEP_LENGTH_MS));
-            }
-        } else {
-            let change = (old_brightness.saturating_sub(value)) as f32 / TRANSITION_STEPS as f32;
-            for i in 1..TRANSITION_STEPS {
-                set_brightness(
-                    config,
-                    old_brightness.saturating_sub((change * i as f32) as u32),
-                );
-                sleep(Duration::from_millis(TRANSITION_STEP_LENGTH_MS));
+    if matches!(
+        config.backlight_transition(),
+        brightness_transition::BrightnessTransition::Linear
+    ) {
+        if let Some(old_brightness) = old_brightness {
+            let transition_step_length_ms = (config.backlight_transition_time_seconds() as f32
+                / config.backlight_transition_step_count() as f32
+                * 1000_f32) as u64;
+            if value > old_brightness {
+                let change = (value.saturating_sub(old_brightness)) as f32
+                    / config.backlight_transition_step_count() as f32;
+                for i in 1..config.backlight_transition_step_count() {
+                    set_brightness(
+                        config,
+                        old_brightness.saturating_add((change * i as f32) as u32),
+                    );
+                    sleep(Duration::from_millis(transition_step_length_ms));
+                }
+            } else {
+                let change = (old_brightness.saturating_sub(value)) as f32
+                    / config.backlight_transition_step_count() as f32;
+                for i in 1..config.backlight_transition_step_count() {
+                    set_brightness(
+                        config,
+                        old_brightness.saturating_sub((change * i as f32) as u32),
+                    );
+                    sleep(Duration::from_millis(transition_step_length_ms));
+                }
             }
         }
     }
