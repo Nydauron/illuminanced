@@ -11,6 +11,7 @@ use config::Config;
 use daemonize::Daemonize;
 use getopts::Options;
 use kalman::Kalman;
+use serde::Deserialize;
 use simplelog::{
     ColorChoice, Config as LoggerConfig, LevelFilter, TermLogger, TerminalMode, WriteLogger,
 };
@@ -231,7 +232,7 @@ fn print_usage(program: &str, opts: Options) {
     print!("{}", opts.usage(&brief));
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct LightPoint {
     illuminance: u32,
     light: u32,
@@ -249,14 +250,6 @@ pub enum ErrorCode {
     ReadIlluminanceError,
     CannotSetBacklight,
     SyslogOpenError,
-}
-
-fn parse_config(config: &str) -> Result<toml::Table, ErrorCode> {
-    let config_result = config.parse::<toml::Table>();
-    config_result.map_err(|e| {
-        println!("Cannot parse config file: {}", e.message());
-        ErrorCode::ConfigParseError
-    })
 }
 
 fn run() -> Result<(), ErrorCode> {
@@ -285,20 +278,37 @@ fn run() -> Result<(), ErrorCode> {
         return Ok(());
     };
 
-    let config = if let Some(config_filename) = matches.opt_str("config") {
-        let f = read_file_to_string(&config_filename);
-        if let Err(e) = f {
-            println!("Cannot open config file `{}`: {}", config_filename, e);
-            return Err(ErrorCode::ConfigReadError);
+    let config = {
+        let f = if let Some(config_filename) = matches.opt_str("config") {
+            let f = read_file_to_string(&config_filename);
+            if let Err(e) = f {
+                println!("Cannot open config file `{}`: {}", config_filename, e);
+                return Err(ErrorCode::ConfigReadError);
+            }
+            f
+        } else {
+            let default = "/usr/local/etc/illuminanced.toml";
+            let f = read_file_to_string(default);
+            if let Err(ref e) = f {
+                println!("Cannot open config file `{}`: {}, ignore", default, e);
+            }
+            f
+        };
+        let config_content_str = match f {
+            Ok(content) => content,
+            Err(e) => {
+                println!("Error occured while reading file: {}", e);
+                return Err(ErrorCode::ConfigReadError);
+            }
+        };
+
+        match toml::from_str::<Config>(&config_content_str) {
+            Ok(config) => config,
+            Err(e) => {
+                println!("Cannot parse config file: {}", e);
+                return Err(ErrorCode::ConfigParseError);
+            }
         }
-        Config::new(parse_config(&f.unwrap()).ok())
-    } else {
-        let default = "/usr/local/etc/illuminanced.toml";
-        let f = read_file_to_string(default);
-        if let Err(ref e) = f {
-            println!("Cannot open config file `{}`: {}, ignore", default, e);
-        }
-        Config::new(f.ok().and_then(|f| parse_config(&f).ok()))
     };
 
     if matches.opt_present("d") {
@@ -336,8 +346,8 @@ fn run() -> Result<(), ErrorCode> {
         })?;
     }
 
-    let light_points = config.light_points()?;
-    let light_convertor = LightConvertor::new(light_points);
+    let light_points = config.light_points();
+    let light_convertor = LightConvertor::new(Vec::from(light_points));
     let max_brightness = read_file_to_u32(config.max_backlight_filename())
         .ok_or(ErrorCode::ReadMaxBrightnessError)?;
 

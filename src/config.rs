@@ -1,187 +1,182 @@
 use crate::brightness_transition::BrightnessTransition;
-use crate::ErrorCode;
 use crate::LightPoint;
 use log::LevelFilter;
-use std::str::FromStr;
+use serde::Deserialize;
 
+#[derive(Debug, Deserialize)]
+struct Daemonize {
+    pub log_to: String,
+    pub log_level: LevelFilter,
+    pub pid_file: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct General {
+    pub light_steps: u32,
+    pub min_backlight: u32,
+    pub step_barrier: f32,
+    pub check_period_in_seconds: u64,
+    pub backlight_transition: BrightnessTransition,
+    pub backlight_transition_step_count: u32,
+    pub backlight_transition_time_seconds: u64,
+    pub event_device_name: String,
+    pub event_device_mask: String,
+    pub enable_max_brightness_mode: bool,
+    pub max_backlight_file: String,
+    pub backlight_file: String,
+    pub illuminance_file: String,
+    pub switch_key_code: u16,
+}
+
+#[derive(Debug, Deserialize)]
+struct Kalman {
+    pub q: f32,
+    pub r: f32,
+    pub covariance: f32,
+}
+
+#[derive(Debug, Deserialize)]
+struct Light {
+    pub light_points: Option<Vec<LightPoint>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(default)]
 pub struct Config {
-    table: Option<toml::Table>,
+    daemonize: Daemonize,
+    general: General,
+    kalman: Kalman,
+    light: Light,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            daemonize: Daemonize {
+                log_to: "/var/log/illuminanced.log".into(),
+                log_level: LevelFilter::Warn,
+                pid_file: "/run/illuminanced.pid".into(),
+            },
+            general: General {
+                light_steps: 10,
+                min_backlight: 70,
+                step_barrier: 0.1,
+                check_period_in_seconds: 1,
+                backlight_transition: BrightnessTransition::Linear,
+                backlight_transition_step_count: 20,
+                backlight_transition_time_seconds: 1,
+                event_device_name: "/dev/input/event/*".into(),
+                event_device_mask: "Asus WMI hotkeys".into(),
+                enable_max_brightness_mode: true,
+                max_backlight_file: "/sys/class/backlight/intel_backlight/max_brightness".into(),
+                backlight_file: "/sys/class/backlight/intel_backlight/brightness".into(),
+                illuminance_file: "/sys/bus/acpi/devices/ACPI0008:00/iio:device0/in_illuminance_raw".into(),
+                switch_key_code: 0x230, /* KEY_ALS_TOGGLE */
+            },
+            kalman: Kalman {
+                q: 1.0,
+                r: 20.0,
+                covariance: 10.0,
+            },
+            light: Light {
+                light_points: None
+            },
+        }
+    }
 }
 
 impl Config {
-    pub fn new(table: Option<toml::Table>) -> Self {
-        Config { table }
-    }
-
     pub fn log_to_syslog(&self) -> bool {
-        self.get_str("daemonize", "log_to")
-            .is_none_or(|v| v == "syslog")
+        self.daemonize.log_to == "syslog"
     }
 
     pub fn log_filename(&self) -> &str {
-        self.get_str("daemonize", "log_to")
-            .unwrap_or("/var/log/illuminanced.log")
+        &self.daemonize.log_to
     }
 
     pub fn log_level(&self) -> LevelFilter {
-        self.get_str("daemonize", "log_level")
-            .and_then(|s| LevelFilter::from_str(s).ok())
-            .unwrap_or(LevelFilter::Warn)
+        self.daemonize.log_level
     }
 
     pub fn pid_filename(&self) -> &str {
-        self.get_str("daemonize", "pid_file")
-            .unwrap_or("/run/illuminanced.pid")
+        &self.daemonize.pid_file
     }
 
     pub fn light_steps(&self) -> u32 {
-        self.get_u32("general", "light_steps").unwrap_or(10)
+        self.general.light_steps
     }
 
     pub fn min_backlight(&self) -> u32 {
-        self.get_u32("general", "min_backlight").unwrap_or(70)
+        self.general.min_backlight
     }
 
     pub fn step_barrier(&self) -> f32 {
-        self.get_f32("general", "step_barrier").unwrap_or(0.1)
+        self.general.step_barrier
     }
 
     pub fn check_period_in_seconds(&self) -> u64 {
-        self.get_u32("general", "check_period_in_seconds")
-            .unwrap_or(1) as u64
+        self.general.check_period_in_seconds
     }
 
     pub fn event_device_name(&self) -> &str {
-        self.get_str("general", "event_device_name")
-            .unwrap_or("/dev/input/event/*")
+        &self.general.event_device_name
     }
 
     pub fn event_device_mask(&self) -> &str {
-        self.get_str("general", "event_device_mask")
-            .unwrap_or("Asus WMI hotkeys")
+        &self.general.event_device_mask
     }
 
     pub fn is_max_brightness_mode(&self) -> bool {
-        self.get_bool("general", "enable_max_brightness_mode")
-            .unwrap_or(true)
+        self.general.enable_max_brightness_mode
     }
 
     pub fn kalman_q(&self) -> f32 {
-        self.get_f32("kalman", "q").unwrap_or(1.0)
+        self.kalman.q
     }
 
     pub fn kalman_r(&self) -> f32 {
-        self.get_f32("kalman", "r").unwrap_or(20.0)
+        self.kalman.r
     }
 
     pub fn kalman_covariance(&self) -> f32 {
-        self.get_f32("kalman", "covariance").unwrap_or(10.0)
+        self.kalman.covariance
     }
 
     pub fn max_backlight_filename(&self) -> &str {
-        self.get_str("general", "max_backlight_file")
-            .unwrap_or("/sys/class/backlight/intel_backlight/max_brightness")
+        &self.general.max_backlight_file
     }
 
     pub fn backlight_filename(&self) -> &str {
-        self.get_str("general", "backlight_file")
-            .unwrap_or("/sys/class/backlight/intel_backlight/brightness")
+        &self.general.backlight_file
     }
 
     pub fn illuminance_filename(&self) -> &str {
-        self.get_str("general", "illuminance_file")
-            .unwrap_or("/sys/bus/acpi/devices/ACPI0008:00/iio:device0/in_illuminance_raw")
+        &self.general.illuminance_file
     }
 
     pub fn backlight_transition(&self) -> BrightnessTransition {
-        self.get_str("general", "backlight_transition")
-            .and_then(|s| BrightnessTransition::from_str(s))
-            .unwrap_or(BrightnessTransition::Linear)
+        self.general.backlight_transition
     }
 
     pub fn backlight_transition_step_count(&self) -> u32 {
-        self.get_u32("general", "backlight_transition_step_count")
-            .unwrap_or(20)
+        self.general.backlight_transition_step_count
     }
 
-    pub fn backlight_transition_time_seconds(&self) -> u32 {
-        self.get_u32("general", "backlight_transition_time_seconds")
-            .unwrap_or(1)
+    pub fn backlight_transition_time_seconds(&self) -> u64 {
+        self.general.backlight_transition_time_seconds
     }
 
-    pub fn light_points(&self) -> Result<Vec<LightPoint>, ErrorCode> {
-        if self.table.is_none() {
-            return Ok(self.default_ligth_points());
-        }
-        let count = self
-            .get_u32("light", "points_count")
-            .ok_or(ErrorCode::InvalidPointsInConfig)?;
-        let points: Vec<_> = (0..count)
-            .map(|i| {
-                self.get_u32("light", &format!("illuminance_{}", i))
-                    .and_then(|ill| {
-                        self.get_u32("light", &format!("light_{}", i))
-                            .map(|light| LightPoint {
-                                illuminance: ill,
-                                light,
-                            })
-                    })
-            })
-            .collect();
-
-        if points.iter().any(|p| p.is_none()) {
-            Err(ErrorCode::InvalidPointsInConfig)
-        } else {
-            Ok(points.into_iter().map(|x| x.unwrap()).collect())
-        }
-    }
-
-    fn default_ligth_points(&self) -> Vec<LightPoint> {
-        vec![LightPoint {
-            illuminance: 700,
-            light: self.light_steps() - 1,
-        }]
+    pub fn light_points(&self) -> Box<[LightPoint]> {
+        let light_steps = self.light_steps();
+        self.light.light_points.as_ref().and_then(|a| Some(a.clone().into_boxed_slice())).unwrap_or_else(
+            || Box::new([LightPoint {
+                illuminance: 700,
+                light: light_steps - 1,
+            }])
+        )
     }
 
     pub fn switch_key_code(&self) -> u16 {
-        self.get_u32("general", "switch_key_code")
-            .unwrap_or(0x230/*KEY_ALS_TOGGLE*/) as u16
-    }
-
-    fn get_table_val(&self, table_name: &str, name: &str) -> Option<&toml::Value> {
-        self.table.as_ref()?;
-        let v = self
-            .table
-            .as_ref()
-            .unwrap()
-            .get(table_name)
-            .and_then(|v| v.as_table())
-            .and_then(|t| t.get(name));
-        if v.is_none() {
-            warn!("Cannot find `{}` in [{}]", name, table_name);
-        }
-        v
-    }
-
-    fn get_str(&self, table_name: &str, name: &str) -> Option<&str> {
-        self.get_table_val(table_name, name)
-            .and_then(|v| v.as_str())
-    }
-
-    fn get_u32(&self, table_name: &str, name: &str) -> Option<u32> {
-        self.get_table_val(table_name, name)
-            .and_then(|v| v.as_integer())
-            .map(|i| i as u32)
-    }
-
-    fn get_f32(&self, table_name: &str, name: &str) -> Option<f32> {
-        self.get_table_val(table_name, name)
-            .and_then(|v| v.as_float())
-            .map(|i| i as f32)
-    }
-
-    fn get_bool(&self, table_name: &str, name: &str) -> Option<bool> {
-        self.get_table_val(table_name, name)
-            .and_then(|v| v.as_bool())
+        self.general.switch_key_code
     }
 }

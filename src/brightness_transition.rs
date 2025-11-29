@@ -1,4 +1,6 @@
-#[derive(Debug)]
+use serde::Deserialize;
+
+#[derive(Debug, Copy, Clone, Deserialize)]
 pub enum BrightnessTransition {
     Instant,
     Linear,
