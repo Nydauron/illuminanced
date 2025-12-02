@@ -96,7 +96,7 @@ impl Config {
     pub fn backlight_transition(&self) -> BrightnessTransition {
         self.get_str("general", "backlight_transition")
             .and_then(|s| BrightnessTransition::from_str(s))
-            .unwrap_or(BrightnessTransition::Linear)
+            .unwrap_or(BrightnessTransition::Instant)
     }
 
     pub fn backlight_transition_step_count(&self) -> u32 {

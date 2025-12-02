@@ -10,7 +10,7 @@ check_period_in_seconds = 1
 light_steps = 10
 min_backlight = 70
 step_barrier = 0.1
-backlight_transition = "Linear"
+backlight_transition = "Instant"
 # backlight_transition_step_count and backlight_transition_time_seconds are used only when backlight_transition
 # is set to "linear"
 backlight_transition_step_count = 20
